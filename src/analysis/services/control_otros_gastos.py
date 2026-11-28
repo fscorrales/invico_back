@@ -1115,9 +1115,10 @@ class ControlOtrosGastosCruceService:
     es fondo permanente) contra SGF, con estados ``PAREADO``,
     ``SIIF_SIN_SGF`` y ``SGF_SIN_SIIF``.
 
-    Capa 2 (``mensual``): fondos permanentes de SIIF (``clase_reg =
-    "REG"`` con cuit INVICO) contra TODO el SGF no pareado en la
-    Capa 1 (incluidas las huérfanas), mes a mes, con acumulados.
+    Capa 2 (``mensual``): todo lo no pareado de SIIF —fondos
+    permanentes (``clase_reg = "REG"`` con cuit INVICO) + los
+    ``SIIF_SIN_SGF``— contra TODO el SGF no pareado de la Capa 1
+    (incluidas las huérfanas), mes a mes, con acumulados.
     """
 
     cruce_repository: ControlOtrosGastosCruceRepositoryDependency
@@ -1365,11 +1366,12 @@ class ControlOtrosGastosCruceService:
         no usado cuyo cuit aparece en el resto SIIF: dominio de pagos
         directos).
 
-        Capa 2 - ``mensual``: fondos permanentes de SIIF (``clase_reg =
-        "REG"`` con cuit INVICO) contra TODO el SGF no pareado en la
-        Capa 1 —incluidas las huérfanas ``SGF_SIN_SIIF``, que también
-        podrían ser pagos de fondo— mes a mes, con acumulados y
-        ``dif_pct`` (% sobre el SGF acumulado).
+        Capa 2 - ``mensual``: todo lo no pareado de SIIF —fondos
+        permanentes (``clase_reg = "REG"`` con cuit INVICO, que nunca
+        entran al pareo) + los ``SIIF_SIN_SGF``— contra TODO el SGF no
+        pareado en la Capa 1 —incluidas las huérfanas
+        ``SGF_SIN_SIIF``—, mes a mes, con acumulados y ``dif_pct``
+        (% sobre el SGF acumulado).
 
         Args:
             params: Filtro con el ``ejercicio``.
@@ -1649,6 +1651,7 @@ class ControlOtrosGastosCruceService:
                 f"{grupos_cuit} grupos / {filas_cuit} filas SIIF"
             )
 
+        sin_sgf_siif: set = set()
         for indice in orden:
             if indice in pareadas_agrupadas:
                 continue  # ya pareada en un pre-paso de agrupación
@@ -1674,6 +1677,7 @@ class ControlOtrosGastosCruceService:
 
             if candidatos.empty:
                 pareos.append(_lado_siif(ejercicio, ESTADO_SIIF_SIN_SGF, fila))
+                sin_sgf_siif.add(indice)
                 continue
 
             comparacion = candidatos.assign(
@@ -1714,7 +1718,14 @@ class ControlOtrosGastosCruceService:
         # que además figura en pagos directos). Las huérfanas siguen
         # siendo filas de la Capa 1; acá solo cuentan sus importes.
         sgf_fondo = df_sgf.loc[~df_sgf["_usado"]]
-        siif_rendido = perm.groupby("mes")["importe"].sum()
+        # Del lado SIIF: fondos permanentes (nunca entran al pareo) +
+        # los SIIF_SIN_SGF de la Capa 1 —son pocos, pero también
+        # podrían corresponder a un fondo sin contraparte en SGF—:
+        # todo lo no pareado de SIIF contra todo lo no pareado de SGF.
+        siif_control = pd.concat(
+            [perm, resto.loc[resto.index.isin(sin_sgf_siif)]]
+        )
+        siif_rendido = siif_control.groupby("mes")["importe"].sum()
         sgf_pagado = sgf_fondo.groupby("mes")["importe_bruto"].sum()
 
         meses = sorted(set(siif_rendido.index) | set(sgf_pagado.index), key=_clave_mes)
